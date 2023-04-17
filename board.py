@@ -37,6 +37,7 @@ class board:
         self.vaccine = np.array([x, y])
 
     def generate_board(self) -> None:
+        self.board = np.full((self.height + 2, self.width + 2), "B")
         # Create a border
         self.board[0, :] = "M"
         self.board[-1, :] = "M"

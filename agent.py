@@ -7,8 +7,11 @@ class agent:
         self.pos_agent = np.zeros((1, 2))
         # self.pre_pos_agent = np.zeros((1, 2))
         self.iteration = 0
-        self.max_iteration = 1000
+        self.max_iteration = 200
         self.n_shot = 0
+        self.reward_win = 1000
+        self.reward_lose = -1000
+        self.learning_rate = 1e-6
         """
             Feature of agent:
         ok    00. Distance to the nearest zombie(high if agent don't have vaccine)
@@ -24,13 +27,32 @@ class agent:
         ok    10. possible move(high)
         ok    11. can_shot(low)
         """
-        self.feature_agent = np.random.rand(13)
-        self.feature_agent[0] = 1000  # Get far from zombie
-        self.feature_agent[1] = -100  # Prefer to get away from pit
-        self.feature_agent[3] = -100  # Get near to exit port
-        self.feature_agent[4] = -10000  # Get near to vaccine
-        # self.feature_agent[7] = 20  # Get far from all zombies
-        self.feature_agent[8] = 5  # Get far from all obstcales
+        self.max_distance = 25
+        self.X_max = np.array(
+            [
+                self.max_distance,  # Maximum distance to the nearest zombie
+                self.max_distance,  # Maximum distance to the pit
+                self.max_distance,  # Maximum distance to the nearest obstcale
+                self.max_distance,  # Maximum distance to the exit port
+                self.max_distance,  # Maximum distance to the vaccine
+                3,  # Maximum number of shot
+                self.packmanz.initial_n_zombie,  # Maximum number of zombie
+                self.packmanz.initial_n_zombie
+                * self.max_distance,  # Maximum sum of distance to all zombies
+                self.packmanz.board.n_obstcale
+                * self.max_distance,  # Maximum sum of distance to all obstcales
+                1,  # Maximum has vaccine
+                4,  # Maximum possible move
+                1,  # Maximum can_shot
+            ]
+        )
+        self.feature_agent = np.random.rand(12)
+        # self.feature_agent[0] = 1000  # Get far from zombie
+        # self.feature_agent[1] = -100  # Prefer to get away from pit
+        # self.feature_agent[3] = -100  # Get near to exit port
+        # self.feature_agent[4] = -10000  # Get near to vaccine
+        # # self.feature_agent[7] = 20  # Get far from all zombies
+        # self.feature_agent[8] = 5  # Get far from all obstcales
 
     def generate_agent(self) -> None:
         x, y = self.packmanz.board.random_blank_cell()
@@ -83,22 +105,27 @@ class agent:
 
         return possible_move
 
-    def agent_state_value(self) -> float:
-        distance_to_nearest_zombie = 1000
+    def agent_state_value(self) -> list[float, np.ndarray]:
+        distance_to_nearest_zombie = np.inf
         sum_distance_to_zombies = 0
-        for i in range(self.packmanz.n_zombie):
-            dis = self.packmanz.board.euc_distance(
-                self.pos_agent[0],
-                self.pos_agent[1],
-                self.packmanz.zombie[i].pos_zombie[0],
-                self.packmanz.zombie[i].pos_zombie[1],
-            )
-            sum_distance_to_zombies += dis
-            if dis < distance_to_nearest_zombie:
-                distance_to_nearest_zombie = dis
-
+        if self.packmanz.n_zombie == 0:
+            distance_to_nearest_zombie = 0
+        else:
+            for i in range(self.packmanz.n_zombie):
+                dis = self.packmanz.board.euc_distance(
+                    self.pos_agent[0],
+                    self.pos_agent[1],
+                    self.packmanz.zombie[i].pos_zombie[0],
+                    self.packmanz.zombie[i].pos_zombie[1],
+                )
+                sum_distance_to_zombies += dis
+                if dis < distance_to_nearest_zombie:
+                    distance_to_nearest_zombie = dis
+        distance_to_nearest_zombie /= self.X_max[0]
+        sum_distance_to_zombies /= self.X_max[7]
         distance_to_nearest_obstcale = 1000
         sum_distance_to_obstcales = 0
+
         for i in range(self.packmanz.board.n_obstcale):
             dis = self.packmanz.board.man_distance(
                 self.pos_agent[0],
@@ -109,6 +136,8 @@ class agent:
             sum_distance_to_obstcales += dis
             if dis < distance_to_nearest_obstcale:
                 distance_to_nearest_obstcale = dis
+        distance_to_nearest_obstcale /= self.X_max[2]
+        sum_distance_to_obstcales /= self.X_max[8]
 
         distance_to_pit = self.packmanz.board.man_distance(
             self.pos_agent[0],
@@ -116,6 +145,7 @@ class agent:
             self.packmanz.board.pit[0],
             self.packmanz.board.pit[1],
         )
+        distance_to_pit /= self.X_max[1]
 
         distance_to_exit_port = self.packmanz.board.BFS_distance(
             self.pos_agent[0],
@@ -123,6 +153,7 @@ class agent:
             self.packmanz.board.exit_port[0],
             self.packmanz.board.exit_port[1],
         )
+        distance_to_exit_port /= self.X_max[3]
 
         distance_to_vaccine = self.packmanz.board.BFS_distance(
             self.pos_agent[0],
@@ -130,8 +161,10 @@ class agent:
             self.packmanz.board.vaccine[0],
             self.packmanz.board.vaccine[1],
         )
+        distance_to_vaccine /= self.X_max[4]
 
-        possible_move = self.possible_agent_move()
+        possible_move = len(self.possible_agent_move())
+        possible_move /= self.X_max[10]
 
         can_shot = False
         D_shot = [(-2, 0), (2, 0), (0, -2), (0, 2)]
@@ -171,11 +204,28 @@ class agent:
             * (self.packmanz.board.has_vaccine * -1)
             + sum_distance_to_obstcales * self.feature_agent[8]
             + self.packmanz.board.has_vaccine * self.feature_agent[9]
-            + len(possible_move) * self.feature_agent[10]
+            + possible_move * self.feature_agent[10]
             + can_shot * self.feature_agent[11]
         )
 
-        return state_value
+        X = np.array(
+            [
+                distance_to_nearest_zombie,
+                distance_to_pit,
+                distance_to_nearest_obstcale,
+                distance_to_exit_port,
+                distance_to_vaccine,
+                self.n_shot,
+                self.packmanz.n_zombie / self.X_max[6],
+                sum_distance_to_zombies,
+                sum_distance_to_obstcales,
+                self.packmanz.board.has_vaccine,
+                possible_move,
+                can_shot,
+            ]
+        )
+
+        return state_value, X
 
     def choose_agent_action(self) -> tuple:
         possible_move = self.possible_agent_move()
@@ -196,7 +246,7 @@ class agent:
             self.packmanz.board.board[
                 self.pos_agent[0], self.pos_agent[1]
             ] = "A"
-            state_value = self.agent_state_value()
+            state_value, X = self.agent_state_value()
 
             if state_value > max_state_value:
                 max_state_value = state_value
@@ -220,7 +270,8 @@ class agent:
             or self.iteration > self.max_iteration
         ):
             print("Agent can't move")
-            exit()  # Update weight
+            self.update_feature_agent(False)
+            return -np.inf
         # self.pre_pos_agent = self.pos_agent.copy()
 
         self.iteration += 1
@@ -273,9 +324,26 @@ class agent:
             self.packmanz.board.board[
                 self.pos_agent[0], self.pos_agent[1]
             ] = "A"
-            print("Bar Table Shadane Bekooob =)")
-            exit()  # Update weight
+            print("Bar Tabl, Shadane Bekooob =)")
+            self.update_feature_agent(True)
+            return np.inf
 
         self.packmanz.board.board[self.pos_agent[0], self.pos_agent[1]] = "A"
 
         return state_value_agent
+
+    def update_feature_agent(self, is_win):
+        # self.packmanz.board.print_board()
+        self.packmanz.n_played_game += 1
+        state_value, X = self.agent_state_value()
+        if is_win:
+            self.feature_agent += (
+                self.learning_rate * (self.reward_win - state_value) * X
+            )
+        else:
+            self.feature_agent += (
+                self.learning_rate * (self.reward_lose - state_value) * X
+            )
+
+        # Generate new game
+        self.packmanz.reset()
